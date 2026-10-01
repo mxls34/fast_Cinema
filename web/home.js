@@ -1,6 +1,6 @@
 import { rpc, esc } from "./api.js";
 
-const HOLD_MS = 60_000;        // hold the home button this long to open the report
+const HOLD_MS = 20_000;        // hold the home button this long to open the report
 const RING_AFTER_MS = 2_000;   // only show the progress ring once it is clearly a long press
 
 const TEXT = {
