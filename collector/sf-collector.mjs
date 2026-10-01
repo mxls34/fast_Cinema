@@ -5,7 +5,7 @@
 //   npm run sf:dry        collect and print what would be saved, without writing to Supabase
 //   npm run sf            collect and save to Supabase through the scrape-cinemas "ingest" action
 //
-// Options: --movies=40 (how many movies), --days=3 (days per movie, max 7), --browser=chrome|msedge|chromium,
+// Options: --movies=40 (how many movies), --days=3 (days ahead to keep, max 14), --browser=chrome|msedge|chromium,
 //          --headless (only after a first visible run passed the challenge)
 import { chromium } from "playwright";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -92,32 +92,21 @@ async function visit(url, { waitChallenge = true } = {}) {
   for (let y = 0; y < 6; y++) { await page.mouse.wheel(0, 1500); await page.waitForTimeout(400); }
 }
 
-// Showtimes live on /th/showtime/{movie id} (found by hand: "ซื้อบัตรชมภาพยนตร์" leads there).
-// The page shows one day at a time with a strip of date buttons, so open it per movie and click each day.
+// Showtimes live on /th/showtime/{movie id} (found by hand: "ซื้อบัตรชมภาพยนตร์" leads there). That page loads
+// ticket/data/session?contentId={id}, which lists every showtime of the movie for about two weeks, plus
+// ticket/data/branch with the names of all branches, so one page visit per movie is enough.
 const SHOWTIME_URL = "https://www.sfcinema.com/th/showtime/{id}";
-const THAI_MONTH = /\d{1,2}\s*(ม\.?ค|ก\.?พ|มี\.?ค|เม\.?ย|พ\.?ค|มิ\.?ย|ก\.?ค|ส\.?ค|ก\.?ย|ต\.?ค|พ\.?ย|ธ\.?ค)/;
-const DAYS = Math.min(Math.max(Number(args.get("days")) || (DISCOVER ? 2 : 3), 1), 7);
+const DAYS = Math.min(Math.max(Number(args.get("days")) || 3, 1), 14);
 const pages = [], visited = [];
 
 async function collectMovie(movie) {
   const url = SHOWTIME_URL.replace("{id}", movie.id);
+  const has = () => responses.some((r) => r.url.includes("/ticket/data/session?") && r.url.includes(`contentId=${movie.id}`));
   await visit(url);
   visited.push(url);
-  if (pages.length < 4) pages.push({ url: page.url(), html: await page.content() });
-  // the first day is selected on load; click the following date buttons
-  const dates = page.getByText(THAI_MONTH).locator("visible=true");
-  const n = Math.min(await dates.count(), DAYS);
-  for (let i = 1; i < n; i++) {
-    const el = dates.nth(i);
-    const label = (await el.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-    await el.click({ timeout: 5000 }).catch(() => {});
-    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
-    await page.waitForTimeout(1500);
-    for (let y = 0; y < 4; y++) { await page.mouse.wheel(0, 1500); await page.waitForTimeout(300); }
-    visited.push(`  day ${label}`);
-    if (DISCOVER && pages.length < 5) pages.push({ url: `${page.url()} (${label})`, html: await page.content() });
-  }
-  return n;
+  if (DISCOVER && pages.length < 3) pages.push({ url: page.url(), html: await page.content() });
+  for (let t = 0; t < 30 && !has(); t++) await page.waitForTimeout(1000);
+  return has();
 }
 
 try {
@@ -137,9 +126,8 @@ try {
 
   const todo = nowShowing.slice(0, DISCOVER ? 2 : MAX_MOVIES);
   for (const [i, m] of todo.entries()) {
-    const before = responses.length;
-    const days = await collectMovie(m);
-    console.log(`  [${i + 1}/${todo.length}] ${m.title}: ${days} day(s), ${responses.length - before} responses`);
+    const ok = await collectMovie(m);
+    console.log(`  [${i + 1}/${todo.length}] ${m.title}: ${ok ? "showtimes loaded" : "no showtimes response"}`);
   }
 } catch (e) {
   console.error("stopped early:", e.message);
@@ -160,15 +148,22 @@ if (DISCOVER) {
   console.log("saved to", fileURLToPath(dir));
 }
 
-const { movies, showtimes } = parseSf(responses, { movieUrl: SHOWTIME_URL });
-const theaters = new Set(showtimes.map((s) => s.theater));
-console.log(`parsed ${movies.length} movies, ${theaters.size} theaters, ${showtimes.length} showtimes`);
-for (const s of showtimes.slice(0, 5)) console.log("  e.g.", s.movie_title, "|", s.theater, "|", s.screen, "|", s.start_time);
+const { movies, theaters, showtimes } = parseSf(responses, { movieUrl: SHOWTIME_URL, days: DAYS });
+console.log(`parsed ${movies.length} movies, ${theaters.length} theaters, ${showtimes.length} showtimes (next ${DAYS} day(s))`);
+for (const s of showtimes.slice(0, 3)) console.log("  e.g.", s.movie_title, "|", s.theater, "|", s.screen, "|", s.start_time, "|", s.language);
 
 if (DISCOVER || DRY) process.exit(0);
 if (!movies.length && !showtimes.length) {
   console.error("Nothing recognised. Run `npm run sf:discover` and share the out/ folder so the parser can be fixed.");
   process.exit(1);
 }
-const r = await callScraper({ action: "ingest", brand: "sf", movies, showtimes });
-console.log(`saved to Supabase: ${r.movies} movies, ${r.theaters} theaters, ${r.showtimes} showtimes`);
+// send in chunks so one request stays small; movies and theaters go with the first chunk
+const CHUNK = 4000;
+let saved = 0;
+for (let i = 0; i === 0 || i < showtimes.length; i += CHUNK) {
+  const part = showtimes.slice(i, i + CHUNK);
+  const r = await callScraper({ action: "ingest", brand: "sf", ...(i === 0 ? { movies, theaters } : {}), showtimes: part });
+  saved += r.showtimes;
+  if (i === 0) console.log(`saved to Supabase: ${r.movies} movies, ${r.theaters} theaters`);
+}
+console.log(`saved to Supabase: ${saved} showtimes`);

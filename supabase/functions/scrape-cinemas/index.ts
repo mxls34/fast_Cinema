@@ -107,7 +107,8 @@ async function majorShowtimes(movie: MovieRow, date: string): Promise<ShowRow[]>
 }
 
 // ---------- shared writer ----------
-async function save(brand: "major" | "sf", movies: MovieRow[], shows: ShowRow[]) {
+type TheaterRow = { name: string; city?: string | null };
+async function save(brand: "major" | "sf", movies: MovieRow[], shows: ShowRow[], extraTheaters: TheaterRow[] = []) {
   // movies (merge on title so the same film from both chains shares one row)
   const byTitle = new Map<string, MovieRow>();
   for (const m of movies) if (m.title) byTitle.set(m.title, { ...byTitle.get(m.title), ...m });
@@ -128,10 +129,10 @@ async function save(brand: "major" | "sf", movies: MovieRow[], shows: ShowRow[])
   }
 
   // theaters (upsert returns ids, so no long ?name=in.(...) lookups)
-  const theaterNames = [...new Set(shows.map((s) => s.theater))];
+  const theaterNames = [...new Set([...extraTheaters.map((t) => t.name), ...shows.map((s) => s.theater)])];
   const theaterId = new Map<string, number>();
   if (theaterNames.length) {
-    const cities = new Map(shows.filter((s) => s.city).map((s) => [s.theater, s.city]));
+    const cities = new Map([...extraTheaters, ...shows.map((s) => ({ name: s.theater, city: s.city }))].filter((t) => t.city).map((t) => [t.name, t.city]));
     const { data, error } = await db.from("theaters").upsert(
       theaterNames.map((name) => ({ brand, name, ...(cities.get(name) ? { city: cities.get(name) } : {}) })),
       { onConflict: "brand,name" },
@@ -176,7 +177,9 @@ async function logRun(source: string, started: Date, r: { movies?: number; theat
 
 // ---------- SF ingest validation ----------
 const str = (v: unknown, max = 300) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
-function cleanIngest(body: any): { movies: MovieRow[]; shows: ShowRow[] } {
+function cleanIngest(body: any): { movies: MovieRow[]; shows: ShowRow[]; theaters: TheaterRow[] } {
+  const theaters: TheaterRow[] = (Array.isArray(body.theaters) ? body.theaters : []).slice(0, 300)
+    .map((t: any) => ({ name: str(t.name, 150)!, city: str(t.city, 100) })).filter((t: TheaterRow) => t.name);
   const movies: MovieRow[] = (Array.isArray(body.movies) ? body.movies : []).slice(0, 500).map((m: any) => ({
     title: str(m.title, 200)!, duration: Number.isFinite(+m.duration) && +m.duration > 0 ? Math.round(+m.duration) : null,
     poster_url: /^https:\/\//.test(m.poster_url ?? "") ? str(m.poster_url, 500) : null, genre: str(m.genre, 100),
@@ -189,7 +192,7 @@ function cleanIngest(body: any): { movies: MovieRow[]; shows: ShowRow[] } {
     start_time: !isNaN(Date.parse(s.start_time)) ? new Date(s.start_time).toISOString() : "", language: str(s.language, 30),
     source_showtime_id: str(s.source_showtime_id, 60),
   })).filter((s: ShowRow) => s.movie_title && s.theater && s.start_time);
-  return { movies, shows };
+  return { movies, shows, theaters };
 }
 
 Deno.serve(async (req) => {
@@ -204,9 +207,9 @@ Deno.serve(async (req) => {
 
   if (body.action === "ingest") {
     try {
-      const { movies, shows } = cleanIngest(body);
-      if (!movies.length && !shows.length) return json({ error: "nothing to ingest" }, 400);
-      const r = await save("sf", movies, shows);
+      const { movies, shows, theaters } = cleanIngest(body);
+      if (!movies.length && !shows.length && !theaters.length) return json({ error: "nothing to ingest" }, 400);
+      const r = await save("sf", movies, shows, theaters);
       await logRun("sf", started, r, "ok", `ingested from local collector`);
       return json({ ok: true, ...r });
     } catch (e) {
