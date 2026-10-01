@@ -49,8 +49,9 @@ npm test                  # parser unit tests
 These are static files with no build step. They need to be served over http, because ES modules don't load from `file://`:
 
 ```bash
-cd web && python3 -m http.server 8000     # open http://localhost:8000
+node web/server.mjs        # open http://localhost:5500  (no install needed)
 ```
+(Avoid `npx serve`: its clean URLs drop the `?id=` from links.)
 
 - **Home**: the three screens from the mockup. **Home** shows everything, **Major** is red and **SF** is blue. The dots under a poster show which chains have it.
 - **Hidden report**: press and **hold Home for 60 s**. A gold ring fills up after 2 s, and at 60 s the page opens `report.html`. The report refreshes every minute and shows:
@@ -78,7 +79,7 @@ In the Major or SF view of Home, a movie card goes straight to that chain's show
 
 1. **Email OTP code**: *Email Templates* → **Magic Link** and **Confirm signup**: add `{{ .Token }}` to the body,
    e.g. `<p>รหัส OTP ของคุณ: <b>{{ .Token }}</b></p>`. Without it the email has only a link (the link also works).
-2. **Redirect URLs**: *URL Configuration* → add `http://localhost:3000/**` (and your real site URL when deployed),
+2. **Redirect URLs**: *URL Configuration* → add `http://localhost:5500/**` (and your real site URL when deployed),
    so the link in the email comes back to `email.html`.
 3. **Who can receive email**: Supabase's built-in email only sends to members of your Supabase team and only a few
    per hour. For real users set up *SMTP Settings* (for example Resend, Brevo or Gmail SMTP).
