@@ -34,3 +34,17 @@ test("time list with a date on the parent, deduplicated", () => {
   assert.equal(r.showtimes.length, 2);
   assert.equal(r.showtimes[0].screen, "Theatre 1");
 });
+
+test("real SF content endpoint: now_showing only, titles match Major spelling", () => {
+  const body = { success: true, data: [
+    { id: "f181827e", type: "now_showing", title: "ธี่หยด: สมิงเขาขวาง", genre: "Action, Horror", rating: "15+", releaseDate: "2026-09-30",
+      contentLength: 110, media: { portrait: "https://media.sfcinema.com/public/p.jpg" } },
+    { id: "x2", type: "coming_soon", title: "Later", contentLength: 90, media: {} },
+  ] };
+  const r = parseSf([{ url: "https://onl.sfcinema.com/ticket/data/content?locale=th&channel=WEB", body }], { movieUrl: "https://www.sfcinema.com/th/movie/{id}" });
+  assert.deepEqual(r.movies, [{
+    title: "ธี่หยด สมิงเขาขวาง", duration: 110, poster_url: "https://media.sfcinema.com/public/p.jpg", genre: "Action, Horror",
+    release_date: "2026-09-30", rating: "15+", url: "https://www.sfcinema.com/th/movie/f181827e",
+  }]);
+  assert.equal(r.showtimes.length, 0);
+});

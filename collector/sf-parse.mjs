@@ -23,6 +23,8 @@ const HHMM = /^\d{1,2}:\d{2}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+// Major writes "ธี่หยด สมิงเขาขวาง" where SF writes "ธี่หยด: สมิงเขาขวาง"; movies are merged by title, so drop the colons
+export const normTitle = (v) => text(v)?.replace(/\s*:\s*/g, " ").replace(/\s+/g, " ").trim() ?? null;
 
 // "2026-10-01 20:30" without an offset is Bangkok local time
 export function toIso(value, dateHint) {
@@ -52,7 +54,7 @@ export function looksLikeMovie(o) {
 
 function movieFrom(o, pageUrl) {
   const k = Object.keys(o);
-  const title = text(o[k.find((x) => /th$/i.test(x) && MOVIE_KEY.test(x))]) ?? text(o[k.find((x) => MOVIE_KEY.test(x))]);
+  const title = normTitle(o[k.find((x) => /th$/i.test(x) && MOVIE_KEY.test(x))]) ?? normTitle(o[k.find((x) => MOVIE_KEY.test(x))]);
   const poster = o[k.find((x) => POSTER_KEY.test(x) && typeof o[x] === "string" && /^https:\/\//.test(o[x]))] ?? null;
   const dur = Number(String(o[k.find((x) => DURATION_KEY.test(x))] ?? "").match(/\d+/)?.[0]);
   const genreVal = o[k.find((x) => GENRE_KEY.test(x))];
@@ -79,10 +81,14 @@ function walk(node, ctx, out, pageUrl) {
   const next = { ...ctx };
   if (looksLikeMovie(node)) {
     const m = movieFrom(node, pageUrl);
-    if (m.title) { out.movies.set(m.title, { ...out.movies.get(m.title), ...m }); next.movie = m.title; }
+    if (m.title) {
+      const filled = Object.fromEntries(Object.entries(m).filter(([, v]) => v != null));
+      out.movies.set(m.title, { ...m, ...out.movies.get(m.title), ...filled });
+      next.movie = m.title;
+    }
   }
   for (const [k, v] of Object.entries(node)) {
-    if (MOVIE_KEY.test(k) && text(v) && !next.movie) next.movie = text(v);
+    if (MOVIE_KEY.test(k) && text(v) && !next.movie) next.movie = normTitle(v);
     if (CINEMA_KEY.test(k) && text(v)) next.cinema = text(v);
     if (CINEMA_OBJ.test(k) && v && typeof v === "object" && !Array.isArray(v) && nameOf(v)) next.cinema = nameOf(v);
     if (SCREEN_KEY.test(k) && (typeof v === "string" || typeof v === "number") && String(v).trim()) next.screen = String(v).trim();
@@ -113,10 +119,33 @@ function walk(node, ctx, out, pageUrl) {
   }
 }
 
-// responses: [{ url, pageUrl, body }] captured by the browser
-export function parseSf(responses) {
+// Known SF endpoint (seen in a real capture): onl.sfcinema.com/ticket/data/content
+// -> { data: [{ id, type: "now_showing"|"coming_soon", title, genre, rating, releaseDate, contentLength, media: { portrait } }] }
+const CONTENT = /onl\.sfcinema\.com\/ticket\/data\/content\?/;
+// endpoints that never hold showtimes but are full of dates and names
+const NOISE = /\/campaign\/|\/ticket\/data\/(brand|getconfig|event|specialscreen|popup)\b/;
+
+export function sfMovie(m, movieUrl) {
+  return {
+    title: normTitle(m.title),
+    duration: m.contentLength > 0 && m.contentLength < 600 ? m.contentLength : null,
+    poster_url: m.media?.portrait ?? null,
+    genre: text(m.genre),
+    release_date: DATE.test(m.releaseDate ?? "") ? m.releaseDate : null,
+    rating: text(m.rating),
+    url: movieUrl ? movieUrl.replace("{id}", m.id) : null,
+  };
+}
+
+// responses: [{ url, pageUrl, body }] captured by the browser; movieUrl: e.g. "https://www.sfcinema.com/th/movie/{id}"
+export function parseSf(responses, { movieUrl } = {}) {
   const out = { movies: new Map(), showtimes: [] };
-  for (const r of responses) walk(r.body, {}, out, r.pageUrl);
+  const content = responses.filter((r) => CONTENT.test(r.url)).flatMap((r) => r.body?.data ?? []);
+  for (const m of content) {
+    if (m.type !== "now_showing" || !text(m.title)) continue;
+    out.movies.set(normTitle(m.title), sfMovie(m, movieUrl));
+  }
+  for (const r of responses) if (!CONTENT.test(r.url) && !NOISE.test(r.url)) walk(r.body, {}, out, r.pageUrl);
   const seen = new Set();
   const showtimes = out.showtimes.filter((s) => {
     const k = `${s.theater}|${s.screen}|${s.start_time}`;
