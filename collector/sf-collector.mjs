@@ -39,14 +39,29 @@ page.on("response", async (res) => {
   } catch { /* body not available */ }
 });
 
+// Cloudflare's check page has a localised title, so look for its markup instead of only the English title
+const onChallenge = () => page.evaluate(() =>
+  /just a moment|attention required|สักครู่|checking your browser/i.test(document.title) ||
+  !!document.querySelector('#challenge-form, #challenge-stage, #cf-challenge-running, .cf-turnstile-wrapper'),
+).catch(() => true);
+
 async function passChallenge() {
-  for (let i = 0; i < 120; i++) {
-    const title = await page.title().catch(() => "");
-    if (title && !/just a moment|attention required|กรุณารอสักครู่/i.test(title)) return;
-    if (i === 3) console.log("Cloudflare check is showing. If it asks, tick the box in the browser window (waiting up to 2 minutes)...");
+  for (let i = 0; i < 180; i++) {
+    if (!(await onChallenge())) return;
+    if (i === 3) console.log("Cloudflare check is showing. If it asks, tick the box in the browser window (waiting up to 3 minutes)...");
     await page.waitForTimeout(1000);
   }
-  throw new Error("Cloudflare challenge not passed within 2 minutes");
+  throw new Error("Cloudflare challenge not passed within 3 minutes");
+}
+
+// the movie list request is the sign that the real site (not the Cloudflare page) has loaded
+const CONTENT_RE = /onl\.sfcinema\.com\/ticket\/data\/content\?/;
+async function waitForMovieList(ms) {
+  for (let t = 0; t < ms; t += 1000) {
+    if (responses.some((r) => CONTENT_RE.test(r.url))) return true;
+    await page.waitForTimeout(1000);
+  }
+  return false;
 }
 
 async function visit(url) {
@@ -93,9 +108,16 @@ async function movieUrlTemplate(movie) {
 
 try {
   await visit(HOME);
+  if (!(await waitForMovieList(30_000))) {
+    console.log(`movie list not loaded yet (page title: "${await page.title()}"), reloading...`);
+    await visit(HOME);
+    if (!(await waitForMovieList(120_000))) {
+      console.log("Still no movie list. If the browser shows a Cloudflare box, tick it; otherwise send Claude the out/ folder.");
+    }
+  }
   pages.push({ url: page.url(), html: await page.content() });
 
-  const list = responses.find((r) => /\/ticket\/data\/content\?/.test(r.url))?.body?.data ?? [];
+  const list = responses.find((r) => CONTENT_RE.test(r.url))?.body?.data ?? [];
   const nowShowing = list.filter((m) => m.type === "now_showing");
   console.log(`SF lists ${nowShowing.length} now-showing movies (${list.length} incl. coming soon)`);
 
