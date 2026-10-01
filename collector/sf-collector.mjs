@@ -18,13 +18,31 @@ const MAX_MOVIES = Number(args.get("movies")) || 15;
 const HOME = "https://www.sfcinema.com/th";
 const OUT = new URL("./out/", import.meta.url);
 
-// a persistent profile keeps the Cloudflare clearance cookie between runs
-const ctx = await chromium.launchPersistentContext(fileURLToPath(new URL("./.profile", import.meta.url)), {
-  headless: args.has("headless"),
-  locale: "th-TH",
-  timezoneId: "Asia/Bangkok",
-  viewport: { width: 1280, height: 900 },
-});
+// A persistent profile keeps the Cloudflare clearance cookie between runs. Cloudflare can loop forever on
+// Playwright's test Chromium, so prefer the Chrome installed on the computer and hide the automation flag.
+// --browser=chromium forces the bundled browser, --browser=msedge uses Edge.
+async function launch() {
+  const options = {
+    headless: args.has("headless"),
+    locale: "th-TH",
+    timezoneId: "Asia/Bangkok",
+    viewport: { width: 1280, height: 900 },
+    ignoreDefaultArgs: ["--enable-automation"],
+    args: ["--disable-blink-features=AutomationControlled"],
+  };
+  const wanted = args.get("browser");
+  const channels = wanted === "chromium" ? [undefined] : wanted ? [wanted] : ["chrome", "msedge", undefined];
+  for (const channel of channels) {
+    try {
+      const ctx = await chromium.launchPersistentContext(fileURLToPath(new URL(`./.profile${channel ? "-" + channel : ""}`, import.meta.url)), { ...options, channel });
+      console.log(`browser: ${channel ?? "playwright chromium"}`);
+      return ctx;
+    } catch (e) {
+      if (channel === channels.at(-1)) throw e;
+    }
+  }
+}
+const ctx = await launch();
 const page = ctx.pages()[0] ?? (await ctx.newPage());
 
 const responses = [];
@@ -47,11 +65,12 @@ const onChallenge = () => page.evaluate(() =>
 
 async function passChallenge() {
   for (let i = 0; i < 180; i++) {
-    if (!(await onChallenge())) return;
+    if (!(await onChallenge())) return true;
     if (i === 3) console.log("Cloudflare check is showing. If it asks, tick the box in the browser window (waiting up to 3 minutes)...");
     await page.waitForTimeout(1000);
   }
-  throw new Error("Cloudflare challenge not passed within 3 minutes");
+  console.log(`Cloudflare check still showing after 3 minutes (page title: "${await page.title().catch(() => "")}")`);
+  return false;
 }
 
 // the movie list request is the sign that the real site (not the Cloudflare page) has loaded
@@ -64,9 +83,9 @@ async function waitForMovieList(ms) {
   return false;
 }
 
-async function visit(url) {
+async function visit(url, { waitChallenge = true } = {}) {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await passChallenge();
+  if (waitChallenge) await passChallenge();
   await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
   // scroll so lazy lists (showtimes per cinema) load
   for (let y = 0; y < 6; y++) { await page.mouse.wheel(0, 1500); await page.waitForTimeout(400); }
@@ -107,15 +126,15 @@ async function movieUrlTemplate(movie) {
 }
 
 try {
-  await visit(HOME);
-  if (!(await waitForMovieList(30_000))) {
-    console.log(`movie list not loaded yet (page title: "${await page.title()}"), reloading...`);
-    await visit(HOME);
-    if (!(await waitForMovieList(120_000))) {
-      console.log("Still no movie list. If the browser shows a Cloudflare box, tick it; otherwise send Claude the out/ folder.");
-    }
+  // on the home page the movie list request is the only reliable sign that we are past Cloudflare
+  await visit(HOME, { waitChallenge: false });
+  console.log("waiting for the SF movie list (tick the Cloudflare box in the browser if one shows, up to 3 minutes)...");
+  if (!(await waitForMovieList(90_000))) {
+    console.log(`movie list not loaded yet (page title: "${await page.title().catch(() => "")}"), reloading...`);
+    await visit(HOME, { waitChallenge: false });
+    await waitForMovieList(90_000);
   }
-  pages.push({ url: page.url(), html: await page.content() });
+  pages.push({ url: page.url(), html: await page.content().catch(() => "") });
 
   const list = responses.find((r) => CONTENT_RE.test(r.url))?.body?.data ?? [];
   const nowShowing = list.filter((m) => m.type === "now_showing");
@@ -133,7 +152,11 @@ try {
       if (pages.length < 3) pages.push({ url: page.url(), html: await page.content() });
     }
   }
+} catch (e) {
+  console.error("stopped early:", e.message);
+  if (!pages.length) pages.push({ url: page.url(), html: await page.content().catch(() => "") });
 } finally {
+  await page.screenshot({ path: fileURLToPath(new URL("./last-page.png", OUT)) }).catch(() => {});
   await ctx.close();
 }
 
