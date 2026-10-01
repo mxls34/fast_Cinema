@@ -1,0 +1,36 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { parseSf, toIso } from "./sf-parse.mjs";
+
+test("toIso treats times without offset as Bangkok", () => {
+  assert.equal(toIso("2026-10-01 20:30"), "2026-10-01T13:30:00.000Z");
+  assert.equal(toIso("20:30", "2026-10-01"), "2026-10-01T13:30:00.000Z");
+  assert.equal(toIso("2026-10-01T13:30:00Z"), "2026-10-01T13:30:00.000Z");
+  assert.equal(toIso("20:30"), null);
+});
+
+test("nested cinema -> movie -> sessions", () => {
+  const body = {
+    data: [{
+      cinema_name: "เอส เอฟ เวิลด์ ซีนีม่า เซ็นทรัลเวิลด์", province: "กรุงเทพฯ",
+      movies: [{
+        movie_name: "Minions", poster_url: "https://cdn.example.com/m.jpg", duration: "124 min",
+        screens: [{ screen_name: "Cinema 5", sessions: [{ id: 99, show_time: "2026-10-01 11:30", language: "TH" }] }],
+      }],
+    }],
+  };
+  const r = parseSf([{ url: "x", pageUrl: "https://www.sfcinema.com/th/movie/minions", body }]);
+  assert.equal(r.movies.length, 1);
+  assert.equal(r.movies[0].duration, 124);
+  assert.deepEqual(r.showtimes, [{
+    movie_title: "Minions", theater: "เอส เอฟ เวิลด์ ซีนีม่า เซ็นทรัลเวิลด์", city: "กรุงเทพฯ", screen: "Cinema 5",
+    start_time: "2026-10-01T04:30:00.000Z", language: "TH", source_showtime_id: "99",
+  }]);
+});
+
+test("time list with a date on the parent, deduplicated", () => {
+  const body = { title: "Joker", cinema: { name: "SF Hua Hin" }, date: "2026-10-02", screen: 1, time: ["11:30", "16:20", "11:30"] };
+  const r = parseSf([{ url: "x", body }, { url: "y", body }]);
+  assert.equal(r.showtimes.length, 2);
+  assert.equal(r.showtimes[0].screen, "Theatre 1");
+});

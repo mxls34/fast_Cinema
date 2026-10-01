@@ -1,0 +1,19 @@
+{
+  "name": "fast-cinema-collector",
+  "private": true,
+  "type": "module",
+  "description": "Collects SF Cinema data in a real browser and triggers the Major Cineplex scrape on Supabase",
+  "scripts": {
+    "major": "node run-major.mjs",
+    "sf": "node sf-collector.mjs",
+    "sf:dry": "node sf-collector.mjs --dry-run",
+    "sf:discover": "node sf-collector.mjs --discover",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "playwright": "^1.47.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

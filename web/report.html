@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="robots" content="noindex" />
+  <title>Fast Cinema Report</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="report.css" />
+</head>
+<body data-view="home" class="report">
+  <div class="app">
+    <header class="topbar">
+      <a class="back" href="./">Back</a>
+      <h1>รายงานระบบ</h1>
+      <span class="topbar-side updated" id="updated"></span>
+    </header>
+
+    <main class="content">
+      <section class="health" id="health" aria-label="สถานะการดึงข้อมูล"></section>
+
+      <section class="tiles" id="tiles" aria-label="ตัวเลขสรุป"></section>
+
+      <section class="panel">
+        <h2>รอบฉายที่เก็บไว้ 7 วันข้างหน้า</h2>
+        <div class="legend"><span><i class="dot major"></i>Major</span><span><i class="dot sf"></i>SF</span></div>
+        <div class="chart" id="coverage"></div>
+      </section>
+
+      <section class="panel">
+        <h2>ผู้ชมรายเดือน (ที่นั่งที่จอง)</h2>
+        <div class="legend"><span><i class="dot major"></i>Major</span><span><i class="dot sf"></i>SF</span></div>
+        <div class="chart" id="viewers"></div>
+      </section>
+
+      <section class="panel">
+        <h2>ประวัติการดึงข้อมูล</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>เวลา</th><th>แหล่ง</th><th>สถานะ</th><th class="num">หนัง</th><th class="num">โรง</th><th class="num">รอบ</th><th>หมายเหตุ</th></tr></thead>
+            <tbody id="runs"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <div class="tooltip" id="tip" hidden></div>
+  </div>
+  <script type="module" src="report.js"></script>
+</body>
+</html>
