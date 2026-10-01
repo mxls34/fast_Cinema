@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Fast Cinema</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body data-view="home">
+  <div class="app">
+    <header class="topbar">
+      <span class="topbar-side"></span>
+      <h1 id="title">Home</h1>
+      <div class="topbar-side topbar-tools">
+        <button class="chip" id="lang" type="button" title="เปลี่ยนภาษา">ภาษา</button>
+        <button class="icon-btn" id="search-btn" type="button" aria-label="ค้นหา">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="search" id="search" hidden>
+      <input id="q" type="search" placeholder="ค้นหาชื่อหนัง" autocomplete="off" />
+    </div>
+
+    <main class="content">
+      <p class="status" id="status">กำลังโหลด…</p>
+      <ul class="grid" id="grid"></ul>
+    </main>
+
+    <nav class="dock" aria-label="เลือกโรงภาพยนตร์">
+      <button class="dock-btn major" data-go="major" type="button" aria-label="Major Cineplex">
+        <span>MAJOR</span>
+      </button>
+      <button class="dock-btn home" data-go="home" id="home-btn" type="button" aria-label="หน้าแรก (กดค้าง 1 นาทีเพื่อเปิดรายงาน)">
+        <svg class="hold-ring" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="29" /></svg>
+        <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path d="M3 11 12 3l9 8v10h-6v-6H9v6H3z" fill="currentColor"/></svg>
+      </button>
+      <button class="dock-btn sf" data-go="sf" type="button" aria-label="SF Cinema">
+        <span>SF</span>
+      </button>
+    </nav>
+    <div class="toast" id="toast" role="status" hidden></div>
+  </div>
+  <script type="module" src="home.js"></script>
+</body>
+</html>

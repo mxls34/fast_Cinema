@@ -1,0 +1,5 @@
+node_modules/
+collector/.env
+collector/.profile/
+collector/out/
+.DS_Store
