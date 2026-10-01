@@ -182,9 +182,10 @@ try {
   // Movie detail pages hold no showtimes. SF shows them behind the "buy ticket" button and on the branch
   // pages, so in discover mode click through both and record what loads.
   if (DISCOVER) {
-    if (template && nowShowing[0]) {
-      await explore("buy-ticket button", template.replace("{id}", nowShowing[0].id), [/ซื้อบัตร|ซื้อตั๋ว|buy ticket|get ticket/i, /รอบฉาย|showtime/i]);
-    }
+    // the home page carousel has a "ซื้อบัตรชมภาพยนตร์" button per movie; after it, pick a branch / date / time
+    await explore("buy-ticket button", HOME, [/^\s*ซื้อบัตรชมภาพยนตร์\s*$/, /เอส\s?เอฟ|SF\s?(cinema|x|w)|เซ็นทรัล|central|เดอะมอลล์|the mall/i, /^\s*\d{1,2}:\d{2}\s*$/]);
+    // the search bar on the home page: "รอบฉาย" (showtimes) tab
+    await explore("home showtime search", HOME, [/^\s*รอบฉาย\s*$/, /^\s*ค้นหา\s*$/]);
     await explore("branches page", new URL("/th/cinemas", HOME).href, [/เอส\s?เอฟ|SF\s?(cinema|x|w)|เซ็นทรัล|central|เดอะมอลล์|the mall|เมกา|mega/i]);
     await explore("branches page (2)", new URL("/th/branches", HOME).href, [/เอส\s?เอฟ|SF\s?(cinema|x|w)|เซ็นทรัล|central|เดอะมอลล์|the mall|เมกา|mega/i]);
   }
@@ -203,7 +204,7 @@ if (DISCOVER) {
   writeFileSync(new URL("responses.json", dir), JSON.stringify(responses, null, 2));
   writeFileSync(new URL("visited.txt", dir), [`template: ${template}`, ...visited].join("\n"));
   pages.forEach((p, i) => writeFileSync(new URL(`page-${i}.html`, dir), `<!-- ${p.url} -->\n${p.html}`));
-  for (const f of ["last-page.png", ...["buy-ticket button", "branches page", "branches page (2)"].map((l) => `explore-${l.replace(/\W+/g, "-")}.png`)]) {
+  for (const f of ["last-page.png", ...["buy-ticket button", "home showtime search", "branches page", "branches page (2)"].map((l) => `explore-${l.replace(/\W+/g, "-")}.png`)]) {
     try { writeFileSync(new URL(f, dir), readFileSync(new URL(f, OUT))); } catch { /* not taken */ }
   }
   console.log("saved to", fileURLToPath(dir));
