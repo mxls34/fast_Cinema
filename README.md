@@ -53,6 +53,10 @@ node web/server.mjs        # open http://localhost:5500  (no install needed)
 ```
 (Avoid `npx serve`: its clean URLs drop the `?id=` from links.)
 
+### Deploy on Vercel
+Import the GitHub repo in Vercel, set **Root Directory = `web`**, **Framework Preset = Other**, leave Build Command empty.
+Then add `https://<your-project>.vercel.app/**` to Supabase → Authentication → URL Configuration → Redirect URLs.
+
 - **Home**: the three screens from the mockup. **Home** shows everything, **Major** is red and **SF** is blue. The dots under a poster show which chains have it.
 - **Hidden report**: press and **hold Home for 60 s**. A gold ring fills up after 2 s, and at 60 s the page opens `report.html`. The report refreshes every minute and shows:
   - Health per source: ✓ ok, ! needs a look, or ✕ problem, with the command that fixes it. Major is expected every 6 h. SF is ok if it is under 24 h old.
