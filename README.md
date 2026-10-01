@@ -61,17 +61,26 @@ cd web && python3 -m http.server 8000     # open http://localhost:8000
   - The last 20 scrape runs with their errors.
 - The report is only *hidden*, not protected. Anyone who knows `report.html` can open it. It shows counts and scrape logs only, no customer data.
 
-## What is left to build (the other pages)
+## Booking flow (all 6 features from the slide)
 
-The database functions are already in place. Each page only has to call them with `rpc(name, params)` from `web/api.js`.
-
-| # | Feature (from the slide) | Page | Call |
+| # | Feature | Page | Uses |
 |---|---|---|---|
-| 1 | Which cinemas show a movie (Major / SF) | Movie page (choose Major or SF) | `now_showing()` → `has_major` / `has_sf` |
-| 2 | Showtimes per cinema | Date strip + cinema list with times | `movie_dates(p_movie_id, p_brand)`, `movie_showtimes(p_movie_id, p_brand, p_date)` |
-| 3 | Free seats | Seat map (J–I couple 1,000, H–D normal 260, C 280, B–A 290) | `get_seat_map(p_showtime_id)` |
-| 4 | Email for the e-coupon | Email + OTP screen | `supabase.auth.signInWithOtp({ email })` then `verifyOtp(...)` |
-| 5 | Payment method (credit card / QR) | Payment screen | `create_booking(p_showtime_id, p_seat_ids, p_email, p_method)` with `p_method` = `credit_card` or `qr_code`. It needs the OTP login, and payment is simulated |
-| 6 | "Booking complete" + email | Success screen | Edge function `send-ticket` with `{ token }` |
+| 1 | Which chains show a movie | `movie.html?id=` (from a Home card) | `now_showing()` → Major / SF buttons |
+| 2 | Showtimes per cinema | `showtime.html?id=&brand=` date strip, search by branch / region | `movie_dates`, `movie_showtimes` |
+| 3 | Free seats | `seat.html?showtime=` rows J–A, booked seats greyed, up to 10 seats | `get_seat_map` |
+| 4 | Email for the e-coupon | `email.html` email + OTP code (or the link in the email) | Supabase Auth `signInWithOtp` / `verifyOtp` |
+| 5 | Credit card / QR code | `pay.html` (simulated, no card number, no money moves) | `create_booking` (seats + payment in one transaction) |
+| 6 | "จองสำเร็จ" + email | `done.html?token=` ticket code + QR | `booking_details`, edge function `send-ticket` |
 
-The movie cards on Home currently show a "not available yet" toast. Point them at the movie page once it exists (`web/home.js`, the `#grid` click handler).
+In the Major or SF view of Home, a movie card goes straight to that chain's showtimes.
+
+### Supabase settings the booking flow needs (Dashboard → Authentication)
+
+1. **Email OTP code**: *Email Templates* → **Magic Link** and **Confirm signup**: add `{{ .Token }}` to the body,
+   e.g. `<p>รหัส OTP ของคุณ: <b>{{ .Token }}</b></p>`. Without it the email has only a link (the link also works).
+2. **Redirect URLs**: *URL Configuration* → add `http://localhost:3000/**` (and your real site URL when deployed),
+   so the link in the email comes back to `email.html`.
+3. **Who can receive email**: Supabase's built-in email only sends to members of your Supabase team and only a few
+   per hour. For real users set up *SMTP Settings* (for example Resend, Brevo or Gmail SMTP).
+4. **Ticket email** (feature 6): set the edge-function secrets `RESEND_API_KEY` and `TICKET_FROM`
+   (*Edge Functions → Secrets*). Without them the ticket is shown on screen only.

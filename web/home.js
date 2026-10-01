@@ -5,9 +5,9 @@ const RING_AFTER_MS = 2_000;   // only show the progress ring once it is clearly
 
 const TEXT = {
   th: { home: "Home", major: "Major cinema", sf: "SF cinema", loading: "กำลังโหลด…", empty: "ไม่พบภาพยนตร์", search: "ค้นหาชื่อหนัง",
-        error: "โหลดข้อมูลไม่สำเร็จ", min: "นาที", soon: "หน้ารายละเอียดหนังยังไม่เปิดให้ใช้งาน", hold: "กดค้างต่อเพื่อเปิดรายงาน" },
+        error: "โหลดข้อมูลไม่สำเร็จ", min: "นาที", hold: "กดค้างต่อเพื่อเปิดรายงาน" },
   en: { home: "Home", major: "Major cinema", sf: "SF cinema", loading: "Loading…", empty: "No movies found", search: "Search movies",
-        error: "Could not load movies", min: "min", soon: "Movie details page is not available yet", hold: "Keep holding to open the report" },
+        error: "Could not load movies", min: "min", hold: "Keep holding to open the report" },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -78,7 +78,12 @@ document.querySelector(".dock").addEventListener("click", (e) => {
 });
 addEventListener("hashchange", () => { state.view = viewFromHash(); render(); });
 
-$("grid").addEventListener("click", (e) => { if (e.target.closest(".card")) toast(t("soon")); });
+// Home -> movie page (choose Major / SF); in the Major or SF view go straight to that chain's showtimes
+$("grid").addEventListener("click", (e) => {
+  const card = e.target.closest(".card");
+  if (!card) return;
+  location.href = state.view === "home" ? `movie.html?id=${card.dataset.id}` : `showtime.html?id=${card.dataset.id}&brand=${state.view}`;
+});
 $("search-btn").addEventListener("click", () => {
   const box = $("search");
   box.hidden = !box.hidden;
