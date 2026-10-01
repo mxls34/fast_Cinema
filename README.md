@@ -11,7 +11,7 @@ Database: Supabase project **CinemaTheater** (`jjuvwfbzmpkwzjknhdwu`, ap-northea
 | `supabase/migrations/` | Tables from the "DataBase Schema" slide, plus the read/booking functions (RPCs) and cron jobs | applied to Supabase |
 | `supabase/functions/scrape-cinemas/` | **Data-collection API.** Scrapes majorcineplex.com and receives SF data from the collector | deployed, runs every 6 h |
 | `supabase/functions/send-ticket/` | Emails the e-coupon after a booking (needs `RESEND_API_KEY` + `TICKET_FROM` secrets) | deployed |
-| `collector/` | Runs on your computer: the SF Cinema browser collector, and a button to run the Major scrape now | ready; the SF parser still needs the real site's field names (see below) |
+| `collector/` | Runs on your computer: the SF Cinema browser collector (`npm run sf`), and `npm run major` to run the Major scrape now | working |
 | `web/index.html` | **Home page**: all movies, a Major view, an SF view, and search | done |
 | `web/report.html` | **Monitoring report**: opens when you **hold the Home button for 1 minute** | done |
 
@@ -39,7 +39,10 @@ npm run sf                # parse and save SF to Supabase
 npm test                  # parser unit tests
 ```
 
-> **The SF parser is not verified against the real site yet.** sfcinema.com could not be opened while this was built. `sf-parse.mjs` looks for movie, cinema, screen and time fields by name in whatever JSON the site loads, which should cover common layouts. Run `npm run sf:discover` once and share the `collector/out/sf-discovery-*` folder, so the parser can be matched to the exact fields.
+> **How SF is read** (from real captures, Oct 2026): `ticket/data/content` lists the movies, `ticket/data/branch` the 68 branches,
+> and opening `/th/showtime/{movie id}` loads `ticket/data/session?contentId=…` with every showtime of that movie. The collector keeps
+> the next 3 days (`--days=7` for more), pauses between movies and retries the ones SF did not answer. If SF changes its site and the
+> numbers drop to 0, run `npm run sf:discover` and share the `out/sf-discovery-*` folder.
 
 ## Web app
 

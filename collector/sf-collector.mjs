@@ -125,10 +125,26 @@ try {
   console.log(`SF lists ${nowShowing.length} now-showing movies (${list.length} incl. coming soon)`);
 
   const todo = nowShowing.slice(0, DISCOVER ? 2 : MAX_MOVIES);
+  const missed = [];
   for (const [i, m] of todo.entries()) {
     const ok = await collectMovie(m);
     console.log(`  [${i + 1}/${todo.length}] ${m.title}: ${ok ? "showtimes loaded" : "no showtimes response"}`);
+    if (!ok) missed.push(m);
+    await page.waitForTimeout(1500); // SF stops answering after many quick requests in a row
   }
+  // retry the misses after a pause; if Cloudflare asks again, tick the box in the browser
+  for (const [round, pause] of [[1, 20_000], [2, 60_000]]) {
+    if (!missed.length) break;
+    console.log(`retry ${round}: ${missed.length} movie(s) after ${pause / 1000}s...`);
+    await page.waitForTimeout(pause);
+    for (const m of missed.splice(0)) {
+      const ok = await collectMovie(m);
+      console.log(`  ${m.title}: ${ok ? "showtimes loaded" : "still no showtimes response"}`);
+      if (!ok) missed.push(m);
+      await page.waitForTimeout(3000);
+    }
+  }
+  if (missed.length) console.log(`no showtimes for: ${missed.map((m) => m.title).join(", ")} (they may have none, or run again later)`);
 } catch (e) {
   console.error("stopped early:", e.message);
   if (!pages.length) pages.push({ url: page.url(), html: await page.content().catch(() => "") });
