@@ -37,6 +37,7 @@ async function loadDay(date) {
   for (const b of document.querySelectorAll(".date-btn")) b.classList.toggle("active", b.dataset.date === date);
   $("list").innerHTML = `<p class="status">กำลังโหลด…</p>`;
   try {
+  if (!id) throw new Error("ลิงก์ไม่มี ?id= (ถ้าใช้ npx serve ให้เปิดจากโฟลเดอร์ web ที่มีไฟล์ serve.json)");
     shows = await rpc("movie_showtimes", { p_movie_id: id, p_brand: brand, p_date: date });
     renderList();
   } catch (e) { showError($("list"), e); }

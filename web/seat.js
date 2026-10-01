@@ -9,6 +9,7 @@ const main = $("main");
 const picked = new Map(); // seat_id -> seat
 
 try {
+  if (!showtimeId) throw new Error("ลิงก์ไม่มี ?showtime= (ถ้าใช้ npx serve ให้เปิดจากโฟลเดอร์ web ที่มีไฟล์ serve.json)");
   const info = await showtimeInfo(showtimeId);
   if (!info) throw new Error("ไม่พบรอบฉายนี้");
   const theater = info.screen.theater;

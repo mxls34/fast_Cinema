@@ -5,6 +5,7 @@ const id = Number(params.get("id"));
 const main = $("main");
 
 try {
+  if (!id) throw new Error("ลิงก์ไม่มี ?id= (ถ้าใช้ npx serve ให้เปิดจากโฟลเดอร์ web ที่มีไฟล์ serve.json)");
   const [list, rows] = await Promise.all([rpc("now_showing"), select("movies", `movie_id=eq.${id}&select=*`)]);
   const showing = list.find((m) => m.movie_id === id);
   const movie = rows[0];
