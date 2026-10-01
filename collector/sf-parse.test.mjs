@@ -48,3 +48,15 @@ test("real SF content endpoint: now_showing only, titles match Major spelling", 
   }]);
   assert.equal(r.showtimes.length, 0);
 });
+
+test("showtime page: movie title comes from the page URL when the data lacks it", () => {
+  const content = { url: "https://onl.sfcinema.com/ticket/data/content?locale=th", body: { data: [
+    { id: "65faef2c-75e1-4aa2-8459-143c97bd970a", type: "now_showing", title: "เครยอนชินจัง", media: {} }] } };
+  const shows = { url: "https://onl.sfcinema.com/ticket/data/showtime?x", pageUrl: "https://www.sfcinema.com/th/showtime/65faef2c-75e1-4aa2-8459-143c97bd970a",
+    body: { data: [{ branchName: "เอส เอฟ เวิลด์ ซีเนม่า เซ็นทรัลเวิลด์", sessions: [{ screenName: "Cinema 5", showTime: "2026-10-02T15:40:00" }] }] } };
+  const r = parseSf([content, shows]);
+  assert.equal(r.showtimes.length, 1);
+  assert.equal(r.showtimes[0].movie_title, "เครยอนชินจัง");
+  assert.equal(r.showtimes[0].theater, "เอส เอฟ เวิลด์ ซีเนม่า เซ็นทรัลเวิลด์");
+  assert.equal(r.showtimes[0].start_time, "2026-10-02T08:40:00.000Z");
+});

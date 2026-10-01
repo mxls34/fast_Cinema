@@ -5,7 +5,8 @@
 //   npm run sf:dry        collect and print what would be saved, without writing to Supabase
 //   npm run sf            collect and save to Supabase through the scrape-cinemas "ingest" action
 //
-// Options: --movies=15 (how many movie pages to open), --headless (only after the first run passed the challenge)
+// Options: --movies=40 (how many movies), --days=3 (days per movie, max 7), --browser=chrome|msedge|chromium,
+//          --headless (only after a first visible run passed the challenge)
 import { chromium } from "playwright";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -14,7 +15,7 @@ import { parseSf } from "./sf-parse.mjs";
 
 const args = new Map(process.argv.slice(2).map((a) => { const [k, v] = a.replace(/^--/, "").split("="); return [k, v ?? true]; }));
 const DISCOVER = args.has("discover"), DRY = args.has("dry-run");
-const MAX_MOVIES = Number(args.get("movies")) || 15;
+const MAX_MOVIES = Number(args.get("movies")) || 40;
 const HOME = "https://www.sfcinema.com/th";
 const OUT = new URL("./out/", import.meta.url);
 
@@ -91,64 +92,32 @@ async function visit(url, { waitChallenge = true } = {}) {
   for (let y = 0; y < 6; y++) { await page.mouse.wheel(0, 1500); await page.waitForTimeout(400); }
 }
 
-// The site is a Next.js app without <a href> links to movies, so we click a poster once to learn the
-// movie page URL, then open the other movies by swapping the movie id in that URL.
-const CANDIDATES = (id) => [`/th/movie/${id}`, `/th/movies/${id}`, `/th/movie-detail/${id}`, `/th/showtime/${id}`];
+// Showtimes live on /th/showtime/{movie id} (found by hand: "ซื้อบัตรชมภาพยนตร์" leads there).
+// The page shows one day at a time with a strip of date buttons, so open it per movie and click each day.
+const SHOWTIME_URL = "https://www.sfcinema.com/th/showtime/{id}";
+const THAI_MONTH = /\d{1,2}\s*(ม\.?ค|ก\.?พ|มี\.?ค|เม\.?ย|พ\.?ค|มิ\.?ย|ก\.?ค|ส\.?ค|ก\.?ย|ต\.?ค|พ\.?ย|ธ\.?ค)/;
+const DAYS = Math.min(Math.max(Number(args.get("days")) || (DISCOVER ? 2 : 3), 1), 7);
 const pages = [], visited = [];
-let template = null;
 
-async function clickPoster(movie) {
-  const files = [movie.media?.portrait, movie.media?.landscape].filter(Boolean).map((u) => u.split("/").pop());
-  for (const f of files) {
-    for (const needle of [f, encodeURIComponent(f)]) {
-      const img = page.locator(`img[src*="${needle}"], img[srcset*="${needle}"]`).first();
-      if (!(await img.count())) continue;
-      const before = page.url();
-      await img.scrollIntoViewIfNeeded().catch(() => {});
-      await img.click({ timeout: 5000 }).catch(() => {});
-      await page.waitForURL((u) => u.href !== before, { timeout: 10_000 }).catch(() => {});
-      if (page.url() !== before) return page.url();
-    }
+async function collectMovie(movie) {
+  const url = SHOWTIME_URL.replace("{id}", movie.id);
+  await visit(url);
+  visited.push(url);
+  if (pages.length < 4) pages.push({ url: page.url(), html: await page.content() });
+  // the first day is selected on load; click the following date buttons
+  const dates = page.getByText(THAI_MONTH).locator("visible=true");
+  const n = Math.min(await dates.count(), DAYS);
+  for (let i = 1; i < n; i++) {
+    const el = dates.nth(i);
+    const label = (await el.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    await el.click({ timeout: 5000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+    for (let y = 0; y < 4; y++) { await page.mouse.wheel(0, 1500); await page.waitForTimeout(300); }
+    visited.push(`  day ${label}`);
+    if (DISCOVER && pages.length < 5) pages.push({ url: `${page.url()} (${label})`, html: await page.content() });
   }
-  return null;
-}
-
-async function movieUrlTemplate(movie) {
-  const clicked = await clickPoster(movie);
-  if (clicked?.includes(movie.id)) return clicked.replace(movie.id, "{id}");
-  if (clicked) console.log("  poster opened", clicked, "(movie id not in URL)");
-  for (const path of CANDIDATES(movie.id)) {
-    const res = await page.goto(new URL(path, HOME).href, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => null);
-    await passChallenge();
-    if (res && res.status() < 400 && !/404|not found|ไม่พบหน้า/i.test(await page.title())) return page.url().replace(movie.id, "{id}");
-  }
-  return null;
-}
-
-// open a page, click the first visible element whose text matches each pattern, record where it leads
-async function explore(label, url, patterns) {
-  try {
-    console.log(`explore ${label}: ${url}`);
-    await visit(url);
-    visited.push(`${label}: ${page.url()}`);
-    pages.push({ url: page.url(), html: await page.content() });
-    for (const re of patterns) {
-      const el = page.getByText(re).locator("visible=true").first();
-      if (!(await el.count())) { console.log(`  nothing matches ${re}`); continue; }
-      const text = (await el.innerText().catch(() => "")).slice(0, 60);
-      await el.scrollIntoViewIfNeeded().catch(() => {});
-      await el.click({ timeout: 5000 }).catch((e) => console.log("  click failed:", e.message.split("\n")[0]));
-      await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
-      await page.waitForTimeout(3000);
-      for (let y = 0; y < 4; y++) { await page.mouse.wheel(0, 1200); await page.waitForTimeout(500); }
-      console.log(`  clicked "${text}" -> ${page.url()}`);
-      visited.push(`  clicked "${text}" -> ${page.url()}`);
-      pages.push({ url: page.url(), html: await page.content() });
-    }
-    await page.screenshot({ path: fileURLToPath(new URL(`./explore-${label.replace(/\W+/g, "-")}.png`, OUT)), fullPage: true }).catch(() => {});
-  } catch (e) {
-    console.log(`  explore ${label} failed: ${e.message.split("\n")[0]}`);
-  }
+  return n;
 }
 
 try {
@@ -166,28 +135,11 @@ try {
   const nowShowing = list.filter((m) => m.type === "now_showing");
   console.log(`SF lists ${nowShowing.length} now-showing movies (${list.length} incl. coming soon)`);
 
-  template = nowShowing.length ? await movieUrlTemplate(nowShowing[0]) : null;
-  console.log(template ? `movie page URL: ${template}` : "could not find the movie page URL");
-
-  if (template) {
-    for (const m of nowShowing.slice(0, DISCOVER ? 2 : MAX_MOVIES)) {
-      const url = template.replace("{id}", m.id);
-      console.log("  open", m.title);
-      await visit(url);
-      visited.push(url);
-      if (pages.length < 3) pages.push({ url: page.url(), html: await page.content() });
-    }
-  }
-
-  // Movie detail pages hold no showtimes. SF shows them behind the "buy ticket" button and on the branch
-  // pages, so in discover mode click through both and record what loads.
-  if (DISCOVER) {
-    // the home page carousel has a "ซื้อบัตรชมภาพยนตร์" button per movie; after it, pick a branch / date / time
-    await explore("buy-ticket button", HOME, [/^\s*ซื้อบัตรชมภาพยนตร์\s*$/, /เอส\s?เอฟ|SF\s?(cinema|x|w)|เซ็นทรัล|central|เดอะมอลล์|the mall/i, /^\s*\d{1,2}:\d{2}\s*$/]);
-    // the search bar on the home page: "รอบฉาย" (showtimes) tab
-    await explore("home showtime search", HOME, [/^\s*รอบฉาย\s*$/, /^\s*ค้นหา\s*$/]);
-    await explore("branches page", new URL("/th/cinemas", HOME).href, [/เอส\s?เอฟ|SF\s?(cinema|x|w)|เซ็นทรัล|central|เดอะมอลล์|the mall|เมกา|mega/i]);
-    await explore("branches page (2)", new URL("/th/branches", HOME).href, [/เอส\s?เอฟ|SF\s?(cinema|x|w)|เซ็นทรัล|central|เดอะมอลล์|the mall|เมกา|mega/i]);
+  const todo = nowShowing.slice(0, DISCOVER ? 2 : MAX_MOVIES);
+  for (const [i, m] of todo.entries()) {
+    const before = responses.length;
+    const days = await collectMovie(m);
+    console.log(`  [${i + 1}/${todo.length}] ${m.title}: ${days} day(s), ${responses.length - before} responses`);
   }
 } catch (e) {
   console.error("stopped early:", e.message);
@@ -202,15 +154,13 @@ if (DISCOVER) {
   const dir = new URL(`./sf-discovery-${new Date().toISOString().replace(/[:.]/g, "-")}/`, OUT);
   mkdirSync(dir, { recursive: true });
   writeFileSync(new URL("responses.json", dir), JSON.stringify(responses, null, 2));
-  writeFileSync(new URL("visited.txt", dir), [`template: ${template}`, ...visited].join("\n"));
+  writeFileSync(new URL("visited.txt", dir), visited.join("\n"));
   pages.forEach((p, i) => writeFileSync(new URL(`page-${i}.html`, dir), `<!-- ${p.url} -->\n${p.html}`));
-  for (const f of ["last-page.png", ...["buy-ticket button", "home showtime search", "branches page", "branches page (2)"].map((l) => `explore-${l.replace(/\W+/g, "-")}.png`)]) {
-    try { writeFileSync(new URL(f, dir), readFileSync(new URL(f, OUT))); } catch { /* not taken */ }
-  }
+  try { writeFileSync(new URL("last-page.png", dir), readFileSync(new URL("last-page.png", OUT))); } catch { /* not taken */ }
   console.log("saved to", fileURLToPath(dir));
 }
 
-const { movies, showtimes } = parseSf(responses, { movieUrl: template });
+const { movies, showtimes } = parseSf(responses, { movieUrl: SHOWTIME_URL });
 const theaters = new Set(showtimes.map((s) => s.theater));
 console.log(`parsed ${movies.length} movies, ${theaters.size} theaters, ${showtimes.length} showtimes`);
 for (const s of showtimes.slice(0, 5)) console.log("  e.g.", s.movie_title, "|", s.theater, "|", s.screen, "|", s.start_time);

@@ -145,7 +145,13 @@ export function parseSf(responses, { movieUrl } = {}) {
     if (m.type !== "now_showing" || !text(m.title)) continue;
     out.movies.set(normTitle(m.title), sfMovie(m, movieUrl));
   }
-  for (const r of responses) if (!CONTENT.test(r.url) && !NOISE.test(r.url)) walk(r.body, {}, out, r.pageUrl);
+  // on /th/showtime/{movie id} the showtime data may not repeat the movie title, so seed it from the page URL
+  const titleById = new Map(content.map((m) => [m.id, normTitle(m.title)]));
+  for (const r of responses) {
+    if (CONTENT.test(r.url) || NOISE.test(r.url)) continue;
+    const id = r.pageUrl?.match(/\/showtime\/([0-9a-f-]{36})/)?.[1];
+    walk(r.body, id && titleById.get(id) ? { movie: titleById.get(id) } : {}, out, r.pageUrl);
+  }
   const seen = new Set();
   const showtimes = out.showtimes.filter((s) => {
     const k = `${s.theater}|${s.screen}|${s.start_time}`;
