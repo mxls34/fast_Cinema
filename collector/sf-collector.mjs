@@ -7,7 +7,7 @@
 //
 // Options: --movies=15 (how many movie pages to open), --headless (only after the first run passed the challenge)
 import { chromium } from "playwright";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { callScraper } from "./env.mjs";
 import { parseSf } from "./sf-parse.mjs";
@@ -125,6 +125,32 @@ async function movieUrlTemplate(movie) {
   return null;
 }
 
+// open a page, click the first visible element whose text matches each pattern, record where it leads
+async function explore(label, url, patterns) {
+  try {
+    console.log(`explore ${label}: ${url}`);
+    await visit(url);
+    visited.push(`${label}: ${page.url()}`);
+    pages.push({ url: page.url(), html: await page.content() });
+    for (const re of patterns) {
+      const el = page.getByText(re).locator("visible=true").first();
+      if (!(await el.count())) { console.log(`  nothing matches ${re}`); continue; }
+      const text = (await el.innerText().catch(() => "")).slice(0, 60);
+      await el.scrollIntoViewIfNeeded().catch(() => {});
+      await el.click({ timeout: 5000 }).catch((e) => console.log("  click failed:", e.message.split("\n")[0]));
+      await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
+      await page.waitForTimeout(3000);
+      for (let y = 0; y < 4; y++) { await page.mouse.wheel(0, 1200); await page.waitForTimeout(500); }
+      console.log(`  clicked "${text}" -> ${page.url()}`);
+      visited.push(`  clicked "${text}" -> ${page.url()}`);
+      pages.push({ url: page.url(), html: await page.content() });
+    }
+    await page.screenshot({ path: fileURLToPath(new URL(`./explore-${label.replace(/\W+/g, "-")}.png`, OUT)), fullPage: true }).catch(() => {});
+  } catch (e) {
+    console.log(`  explore ${label} failed: ${e.message.split("\n")[0]}`);
+  }
+}
+
 try {
   // on the home page the movie list request is the only reliable sign that we are past Cloudflare
   await visit(HOME, { waitChallenge: false });
@@ -144,13 +170,23 @@ try {
   console.log(template ? `movie page URL: ${template}` : "could not find the movie page URL");
 
   if (template) {
-    for (const m of nowShowing.slice(0, MAX_MOVIES)) {
+    for (const m of nowShowing.slice(0, DISCOVER ? 2 : MAX_MOVIES)) {
       const url = template.replace("{id}", m.id);
       console.log("  open", m.title);
       await visit(url);
       visited.push(url);
       if (pages.length < 3) pages.push({ url: page.url(), html: await page.content() });
     }
+  }
+
+  // Movie detail pages hold no showtimes. SF shows them behind the "buy ticket" button and on the branch
+  // pages, so in discover mode click through both and record what loads.
+  if (DISCOVER) {
+    if (template && nowShowing[0]) {
+      await explore("buy-ticket button", template.replace("{id}", nowShowing[0].id), [/ซื้อบัตร|ซื้อตั๋ว|buy ticket|get ticket/i, /รอบฉาย|showtime/i]);
+    }
+    await explore("branches page", new URL("/th/cinemas", HOME).href, [/เอส\s?เอฟ|SF\s?(cinema|x|w)|เซ็นทรัล|central|เดอะมอลล์|the mall|เมกา|mega/i]);
+    await explore("branches page (2)", new URL("/th/branches", HOME).href, [/เอส\s?เอฟ|SF\s?(cinema|x|w)|เซ็นทรัล|central|เดอะมอลล์|the mall|เมกา|mega/i]);
   }
 } catch (e) {
   console.error("stopped early:", e.message);
@@ -167,6 +203,9 @@ if (DISCOVER) {
   writeFileSync(new URL("responses.json", dir), JSON.stringify(responses, null, 2));
   writeFileSync(new URL("visited.txt", dir), [`template: ${template}`, ...visited].join("\n"));
   pages.forEach((p, i) => writeFileSync(new URL(`page-${i}.html`, dir), `<!-- ${p.url} -->\n${p.html}`));
+  for (const f of ["last-page.png", ...["buy-ticket button", "branches page", "branches page (2)"].map((l) => `explore-${l.replace(/\W+/g, "-")}.png`)]) {
+    try { writeFileSync(new URL(f, dir), readFileSync(new URL(f, OUT))); } catch { /* not taken */ }
+  }
   console.log("saved to", fileURLToPath(dir));
 }
 
