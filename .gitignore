@@ -3,3 +3,6 @@ collector/.env
 collector/.profile/
 collector/out/
 .DS_Store
+collector/package-lock.json
+package-lock.json
+package.json
