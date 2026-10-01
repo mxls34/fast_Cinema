@@ -47,7 +47,7 @@ async function pool<T, R>(items: T[], size: number, fn: (x: T) => Promise<R>): P
   return out;
 }
 
-type MovieRow = { title: string; duration: number | null; poster_url: string | null; genre: string | null; release_date: string | null; major_url?: string | null; sf_url?: string | null; major_movie_id?: number | null };
+type MovieRow = { title: string; duration: number | null; poster_url: string | null; genre: string | null; release_date: string | null; rating?: string | null; major_url?: string | null; sf_url?: string | null; major_movie_id?: number | null };
 type ShowRow = { movie_title: string; theater: string; city?: string | null; screen: string; start_time: string; language?: string | null; source_showtime_id?: string | null };
 
 // ---------- Major Cineplex ----------
@@ -114,7 +114,7 @@ async function save(brand: "major" | "sf", movies: MovieRow[], shows: ShowRow[])
   for (const s of shows) if (!byTitle.has(s.movie_title)) byTitle.set(s.movie_title, { title: s.movie_title, duration: null, poster_url: null, genre: null, release_date: null });
   const movieRows = [...byTitle.values()].map((m) => {
     const r: Record<string, unknown> = { title: m.title, updated_at: new Date().toISOString() };
-    for (const k of ["duration", "poster_url", "genre", "release_date", "major_url", "sf_url", "major_movie_id"] as const) if (m[k] != null) r[k] = m[k];
+    for (const k of ["duration", "poster_url", "genre", "release_date", "rating", "major_url", "sf_url", "major_movie_id"] as const) if (m[k] != null) r[k] = m[k];
     return r;
   });
   // upsert per column-set so a missing field never wipes an existing value
@@ -181,6 +181,7 @@ function cleanIngest(body: any): { movies: MovieRow[]; shows: ShowRow[] } {
     title: str(m.title, 200)!, duration: Number.isFinite(+m.duration) && +m.duration > 0 ? Math.round(+m.duration) : null,
     poster_url: /^https:\/\//.test(m.poster_url ?? "") ? str(m.poster_url, 500) : null, genre: str(m.genre, 100),
     release_date: /^\d{4}-\d{2}-\d{2}$/.test(m.release_date ?? "") ? m.release_date : null,
+    rating: str(m.rating, 20),
     sf_url: /^https:\/\/(www\.)?sfcinema/.test(m.url ?? "") ? str(m.url, 500) : null,
   })).filter((m: MovieRow) => m.title);
   const shows: ShowRow[] = (Array.isArray(body.showtimes) ? body.showtimes : []).slice(0, 20000).map((s: any) => ({

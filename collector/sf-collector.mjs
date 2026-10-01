@@ -31,7 +31,12 @@ const responses = [];
 page.on("response", async (res) => {
   const type = res.headers()["content-type"] ?? "";
   if (!type.includes("json") || res.request().method() === "OPTIONS") return;
-  try { responses.push({ url: res.url(), pageUrl: page.url(), body: await res.json() }); } catch { /* body not available */ }
+  // promotions / news are large and never hold showtimes
+  if (/\/campaign\/cms\/(promotion|newsandactivities|homebanner)/.test(res.url())) return;
+  const req = res.request();
+  try {
+    responses.push({ url: res.url(), method: req.method(), postData: req.postData() ?? null, pageUrl: page.url(), body: await res.json() });
+  } catch { /* body not available */ }
 });
 
 async function passChallenge() {
@@ -52,19 +57,59 @@ async function visit(url) {
   for (let y = 0; y < 6; y++) { await page.mouse.wheel(0, 1500); await page.waitForTimeout(400); }
 }
 
-const pages = [];
+// The site is a Next.js app without <a href> links to movies, so we click a poster once to learn the
+// movie page URL, then open the other movies by swapping the movie id in that URL.
+const CANDIDATES = (id) => [`/th/movie/${id}`, `/th/movies/${id}`, `/th/movie-detail/${id}`, `/th/showtime/${id}`];
+const pages = [], visited = [];
+let template = null;
+
+async function clickPoster(movie) {
+  const files = [movie.media?.portrait, movie.media?.landscape].filter(Boolean).map((u) => u.split("/").pop());
+  for (const f of files) {
+    for (const needle of [f, encodeURIComponent(f)]) {
+      const img = page.locator(`img[src*="${needle}"], img[srcset*="${needle}"]`).first();
+      if (!(await img.count())) continue;
+      const before = page.url();
+      await img.scrollIntoViewIfNeeded().catch(() => {});
+      await img.click({ timeout: 5000 }).catch(() => {});
+      await page.waitForURL((u) => u.href !== before, { timeout: 10_000 }).catch(() => {});
+      if (page.url() !== before) return page.url();
+    }
+  }
+  return null;
+}
+
+async function movieUrlTemplate(movie) {
+  const clicked = await clickPoster(movie);
+  if (clicked?.includes(movie.id)) return clicked.replace(movie.id, "{id}");
+  if (clicked) console.log("  poster opened", clicked, "(movie id not in URL)");
+  for (const path of CANDIDATES(movie.id)) {
+    const res = await page.goto(new URL(path, HOME).href, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => null);
+    await passChallenge();
+    if (res && res.status() < 400 && !/404|not found|ไม่พบหน้า/i.test(await page.title())) return page.url().replace(movie.id, "{id}");
+  }
+  return null;
+}
+
 try {
   await visit(HOME);
   pages.push({ url: page.url(), html: await page.content() });
 
-  const movieLinks = await page.$$eval("a[href]", (as) =>
-    [...new Set(as.map((a) => a.href).filter((h) => /sfcinema\.com\/(th\/)?movies?\/[^/?#]+/i.test(h) && !/now-?showing|coming-?soon/i.test(h)))]);
-  console.log(`found ${movieLinks.length} movie links on the home page`);
+  const list = responses.find((r) => /\/ticket\/data\/content\?/.test(r.url))?.body?.data ?? [];
+  const nowShowing = list.filter((m) => m.type === "now_showing");
+  console.log(`SF lists ${nowShowing.length} now-showing movies (${list.length} incl. coming soon)`);
 
-  for (const url of movieLinks.slice(0, MAX_MOVIES)) {
-    console.log("  open", url);
-    await visit(url);
-    if (pages.length < 3) pages.push({ url: page.url(), html: await page.content() });
+  template = nowShowing.length ? await movieUrlTemplate(nowShowing[0]) : null;
+  console.log(template ? `movie page URL: ${template}` : "could not find the movie page URL");
+
+  if (template) {
+    for (const m of nowShowing.slice(0, MAX_MOVIES)) {
+      const url = template.replace("{id}", m.id);
+      console.log("  open", m.title);
+      await visit(url);
+      visited.push(url);
+      if (pages.length < 3) pages.push({ url: page.url(), html: await page.content() });
+    }
   }
 } finally {
   await ctx.close();
@@ -75,11 +120,12 @@ if (DISCOVER) {
   const dir = new URL(`./sf-discovery-${new Date().toISOString().replace(/[:.]/g, "-")}/`, OUT);
   mkdirSync(dir, { recursive: true });
   writeFileSync(new URL("responses.json", dir), JSON.stringify(responses, null, 2));
+  writeFileSync(new URL("visited.txt", dir), [`template: ${template}`, ...visited].join("\n"));
   pages.forEach((p, i) => writeFileSync(new URL(`page-${i}.html`, dir), `<!-- ${p.url} -->\n${p.html}`));
   console.log("saved to", fileURLToPath(dir));
 }
 
-const { movies, showtimes } = parseSf(responses);
+const { movies, showtimes } = parseSf(responses, { movieUrl: template });
 const theaters = new Set(showtimes.map((s) => s.theater));
 console.log(`parsed ${movies.length} movies, ${theaters.size} theaters, ${showtimes.length} showtimes`);
 for (const s of showtimes.slice(0, 5)) console.log("  e.g.", s.movie_title, "|", s.theater, "|", s.screen, "|", s.start_time);
