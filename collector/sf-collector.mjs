@@ -5,26 +5,45 @@
 //   npm run sf:dry        collect and print what would be saved, without writing to Supabase
 //   npm run sf            collect and save to Supabase through the scrape-cinemas "ingest" action
 //
-// Options: --movies=15 (how many movie pages to open), --headless (only after the first run passed the challenge)
+// Options: --movies=40 (how many movies), --days=3 (days ahead to keep, max 14), --browser=chrome|msedge|chromium,
+//          --headless (only after a first visible run passed the challenge)
 import { chromium } from "playwright";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { callScraper } from "./env.mjs";
 import { parseSf } from "./sf-parse.mjs";
 
 const args = new Map(process.argv.slice(2).map((a) => { const [k, v] = a.replace(/^--/, "").split("="); return [k, v ?? true]; }));
 const DISCOVER = args.has("discover"), DRY = args.has("dry-run");
-const MAX_MOVIES = Number(args.get("movies")) || 15;
+const MAX_MOVIES = Number(args.get("movies")) || 40;
 const HOME = "https://www.sfcinema.com/th";
 const OUT = new URL("./out/", import.meta.url);
 
-// a persistent profile keeps the Cloudflare clearance cookie between runs
-const ctx = await chromium.launchPersistentContext(fileURLToPath(new URL("./.profile", import.meta.url)), {
-  headless: args.has("headless"),
-  locale: "th-TH",
-  timezoneId: "Asia/Bangkok",
-  viewport: { width: 1280, height: 900 },
-});
+// A persistent profile keeps the Cloudflare clearance cookie between runs. Cloudflare can loop forever on
+// Playwright's test Chromium, so prefer the Chrome installed on the computer and hide the automation flag.
+// --browser=chromium forces the bundled browser, --browser=msedge uses Edge.
+async function launch() {
+  const options = {
+    headless: args.has("headless"),
+    locale: "th-TH",
+    timezoneId: "Asia/Bangkok",
+    viewport: { width: 1280, height: 900 },
+    ignoreDefaultArgs: ["--enable-automation"],
+    args: ["--disable-blink-features=AutomationControlled"],
+  };
+  const wanted = args.get("browser");
+  const channels = wanted === "chromium" ? [undefined] : wanted ? [wanted] : ["chrome", "msedge", undefined];
+  for (const channel of channels) {
+    try {
+      const ctx = await chromium.launchPersistentContext(fileURLToPath(new URL(`./.profile${channel ? "-" + channel : ""}`, import.meta.url)), { ...options, channel });
+      console.log(`browser: ${channel ?? "playwright chromium"}`);
+      return ctx;
+    } catch (e) {
+      if (channel === channels.at(-1)) throw e;
+    }
+  }
+}
+const ctx = await launch();
 const page = ctx.pages()[0] ?? (await ctx.newPage());
 
 const responses = [];
@@ -39,79 +58,98 @@ page.on("response", async (res) => {
   } catch { /* body not available */ }
 });
 
+// Cloudflare's check page has a localised title, so look for its markup instead of only the English title
+const onChallenge = () => page.evaluate(() =>
+  /just a moment|attention required|สักครู่|checking your browser/i.test(document.title) ||
+  !!document.querySelector('#challenge-form, #challenge-stage, #cf-challenge-running, .cf-turnstile-wrapper'),
+).catch(() => true);
+
 async function passChallenge() {
-  for (let i = 0; i < 120; i++) {
-    const title = await page.title().catch(() => "");
-    if (title && !/just a moment|attention required|กรุณารอสักครู่/i.test(title)) return;
-    if (i === 3) console.log("Cloudflare check is showing. If it asks, tick the box in the browser window (waiting up to 2 minutes)...");
+  for (let i = 0; i < 180; i++) {
+    if (!(await onChallenge())) return true;
+    if (i === 3) console.log("Cloudflare check is showing. If it asks, tick the box in the browser window (waiting up to 3 minutes)...");
     await page.waitForTimeout(1000);
   }
-  throw new Error("Cloudflare challenge not passed within 2 minutes");
+  console.log(`Cloudflare check still showing after 3 minutes (page title: "${await page.title().catch(() => "")}")`);
+  return false;
 }
 
-async function visit(url) {
+// the movie list request is the sign that the real site (not the Cloudflare page) has loaded
+const CONTENT_RE = /onl\.sfcinema\.com\/ticket\/data\/content\?/;
+async function waitForMovieList(ms) {
+  for (let t = 0; t < ms; t += 1000) {
+    if (responses.some((r) => CONTENT_RE.test(r.url))) return true;
+    await page.waitForTimeout(1000);
+  }
+  return false;
+}
+
+async function visit(url, { waitChallenge = true } = {}) {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await passChallenge();
+  if (waitChallenge) await passChallenge();
   await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
   // scroll so lazy lists (showtimes per cinema) load
   for (let y = 0; y < 6; y++) { await page.mouse.wheel(0, 1500); await page.waitForTimeout(400); }
 }
 
-// The site is a Next.js app without <a href> links to movies, so we click a poster once to learn the
-// movie page URL, then open the other movies by swapping the movie id in that URL.
-const CANDIDATES = (id) => [`/th/movie/${id}`, `/th/movies/${id}`, `/th/movie-detail/${id}`, `/th/showtime/${id}`];
+// Showtimes live on /th/showtime/{movie id} (found by hand: "ซื้อบัตรชมภาพยนตร์" leads there). That page loads
+// ticket/data/session?contentId={id}, which lists every showtime of the movie for about two weeks, plus
+// ticket/data/branch with the names of all branches, so one page visit per movie is enough.
+const SHOWTIME_URL = "https://www.sfcinema.com/th/showtime/{id}";
+const DAYS = Math.min(Math.max(Number(args.get("days")) || 3, 1), 14);
 const pages = [], visited = [];
-let template = null;
 
-async function clickPoster(movie) {
-  const files = [movie.media?.portrait, movie.media?.landscape].filter(Boolean).map((u) => u.split("/").pop());
-  for (const f of files) {
-    for (const needle of [f, encodeURIComponent(f)]) {
-      const img = page.locator(`img[src*="${needle}"], img[srcset*="${needle}"]`).first();
-      if (!(await img.count())) continue;
-      const before = page.url();
-      await img.scrollIntoViewIfNeeded().catch(() => {});
-      await img.click({ timeout: 5000 }).catch(() => {});
-      await page.waitForURL((u) => u.href !== before, { timeout: 10_000 }).catch(() => {});
-      if (page.url() !== before) return page.url();
-    }
-  }
-  return null;
-}
-
-async function movieUrlTemplate(movie) {
-  const clicked = await clickPoster(movie);
-  if (clicked?.includes(movie.id)) return clicked.replace(movie.id, "{id}");
-  if (clicked) console.log("  poster opened", clicked, "(movie id not in URL)");
-  for (const path of CANDIDATES(movie.id)) {
-    const res = await page.goto(new URL(path, HOME).href, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => null);
-    await passChallenge();
-    if (res && res.status() < 400 && !/404|not found|ไม่พบหน้า/i.test(await page.title())) return page.url().replace(movie.id, "{id}");
-  }
-  return null;
+async function collectMovie(movie) {
+  const url = SHOWTIME_URL.replace("{id}", movie.id);
+  const has = () => responses.some((r) => r.url.includes("/ticket/data/session?") && r.url.includes(`contentId=${movie.id}`));
+  await visit(url);
+  visited.push(url);
+  if (DISCOVER && pages.length < 3) pages.push({ url: page.url(), html: await page.content() });
+  for (let t = 0; t < 30 && !has(); t++) await page.waitForTimeout(1000);
+  return has();
 }
 
 try {
-  await visit(HOME);
-  pages.push({ url: page.url(), html: await page.content() });
+  // on the home page the movie list request is the only reliable sign that we are past Cloudflare
+  await visit(HOME, { waitChallenge: false });
+  console.log("waiting for the SF movie list (tick the Cloudflare box in the browser if one shows, up to 3 minutes)...");
+  if (!(await waitForMovieList(90_000))) {
+    console.log(`movie list not loaded yet (page title: "${await page.title().catch(() => "")}"), reloading...`);
+    await visit(HOME, { waitChallenge: false });
+    await waitForMovieList(90_000);
+  }
+  pages.push({ url: page.url(), html: await page.content().catch(() => "") });
 
-  const list = responses.find((r) => /\/ticket\/data\/content\?/.test(r.url))?.body?.data ?? [];
+  const list = responses.find((r) => CONTENT_RE.test(r.url))?.body?.data ?? [];
   const nowShowing = list.filter((m) => m.type === "now_showing");
   console.log(`SF lists ${nowShowing.length} now-showing movies (${list.length} incl. coming soon)`);
 
-  template = nowShowing.length ? await movieUrlTemplate(nowShowing[0]) : null;
-  console.log(template ? `movie page URL: ${template}` : "could not find the movie page URL");
-
-  if (template) {
-    for (const m of nowShowing.slice(0, MAX_MOVIES)) {
-      const url = template.replace("{id}", m.id);
-      console.log("  open", m.title);
-      await visit(url);
-      visited.push(url);
-      if (pages.length < 3) pages.push({ url: page.url(), html: await page.content() });
+  const todo = nowShowing.slice(0, DISCOVER ? 2 : MAX_MOVIES);
+  const missed = [];
+  for (const [i, m] of todo.entries()) {
+    const ok = await collectMovie(m);
+    console.log(`  [${i + 1}/${todo.length}] ${m.title}: ${ok ? "showtimes loaded" : "no showtimes response"}`);
+    if (!ok) missed.push(m);
+    await page.waitForTimeout(1500); // SF stops answering after many quick requests in a row
+  }
+  // retry the misses after a pause; if Cloudflare asks again, tick the box in the browser
+  for (const [round, pause] of [[1, 20_000], [2, 60_000]]) {
+    if (!missed.length) break;
+    console.log(`retry ${round}: ${missed.length} movie(s) after ${pause / 1000}s...`);
+    await page.waitForTimeout(pause);
+    for (const m of missed.splice(0)) {
+      const ok = await collectMovie(m);
+      console.log(`  ${m.title}: ${ok ? "showtimes loaded" : "still no showtimes response"}`);
+      if (!ok) missed.push(m);
+      await page.waitForTimeout(3000);
     }
   }
+  if (missed.length) console.log(`no showtimes for: ${missed.map((m) => m.title).join(", ")} (they may have none, or run again later)`);
+} catch (e) {
+  console.error("stopped early:", e.message);
+  if (!pages.length) pages.push({ url: page.url(), html: await page.content().catch(() => "") });
 } finally {
+  await page.screenshot({ path: fileURLToPath(new URL("./last-page.png", OUT)) }).catch(() => {});
   await ctx.close();
 }
 
@@ -120,20 +158,28 @@ if (DISCOVER) {
   const dir = new URL(`./sf-discovery-${new Date().toISOString().replace(/[:.]/g, "-")}/`, OUT);
   mkdirSync(dir, { recursive: true });
   writeFileSync(new URL("responses.json", dir), JSON.stringify(responses, null, 2));
-  writeFileSync(new URL("visited.txt", dir), [`template: ${template}`, ...visited].join("\n"));
+  writeFileSync(new URL("visited.txt", dir), visited.join("\n"));
   pages.forEach((p, i) => writeFileSync(new URL(`page-${i}.html`, dir), `<!-- ${p.url} -->\n${p.html}`));
+  try { writeFileSync(new URL("last-page.png", dir), readFileSync(new URL("last-page.png", OUT))); } catch { /* not taken */ }
   console.log("saved to", fileURLToPath(dir));
 }
 
-const { movies, showtimes } = parseSf(responses, { movieUrl: template });
-const theaters = new Set(showtimes.map((s) => s.theater));
-console.log(`parsed ${movies.length} movies, ${theaters.size} theaters, ${showtimes.length} showtimes`);
-for (const s of showtimes.slice(0, 5)) console.log("  e.g.", s.movie_title, "|", s.theater, "|", s.screen, "|", s.start_time);
+const { movies, theaters, showtimes } = parseSf(responses, { movieUrl: SHOWTIME_URL, days: DAYS });
+console.log(`parsed ${movies.length} movies, ${theaters.length} theaters, ${showtimes.length} showtimes (next ${DAYS} day(s))`);
+for (const s of showtimes.slice(0, 3)) console.log("  e.g.", s.movie_title, "|", s.theater, "|", s.screen, "|", s.start_time, "|", s.language);
 
 if (DISCOVER || DRY) process.exit(0);
 if (!movies.length && !showtimes.length) {
   console.error("Nothing recognised. Run `npm run sf:discover` and share the out/ folder so the parser can be fixed.");
   process.exit(1);
 }
-const r = await callScraper({ action: "ingest", brand: "sf", movies, showtimes });
-console.log(`saved to Supabase: ${r.movies} movies, ${r.theaters} theaters, ${r.showtimes} showtimes`);
+// send in chunks so one request stays small; movies and theaters go with the first chunk
+const CHUNK = 4000;
+let saved = 0;
+for (let i = 0; i === 0 || i < showtimes.length; i += CHUNK) {
+  const part = showtimes.slice(i, i + CHUNK);
+  const r = await callScraper({ action: "ingest", brand: "sf", ...(i === 0 ? { movies, theaters } : {}), showtimes: part });
+  saved += r.showtimes;
+  if (i === 0) console.log(`saved to Supabase: ${r.movies} movies, ${r.theaters} theaters`);
+}
+console.log(`saved to Supabase: ${saved} showtimes`);

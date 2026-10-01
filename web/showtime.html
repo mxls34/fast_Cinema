@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Fast Cinema Showtimes</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body data-view="home" class="page">
+  <div class="app">
+    <header class="topbar">
+      <a class="back" id="back" href="./">Back</a>
+      <h1 id="title">รอบฉาย</h1>
+      <span class="topbar-side"></span>
+    </header>
+    <main class="content" id="main"><p class="status">กำลังโหลด…</p></main>
+    <nav class="dock" aria-label="เลือกโรงภาพยนตร์">
+      <a class="dock-btn major" href="./#major" aria-label="Major Cineplex"><span>MAJOR</span></a>
+      <a class="dock-btn home" href="./" aria-label="หน้าแรก">
+        <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path d="M3 11 12 3l9 8v10h-6v-6H9v6H3z" fill="currentColor"/></svg>
+      </a>
+      <a class="dock-btn sf" href="./#sf" aria-label="SF Cinema"><span>SF</span></a>
+    </nav>
+  </div>
+  <script type="module" src="showtime.js"></script>
+</body>
+</html>

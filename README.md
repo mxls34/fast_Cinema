@@ -11,7 +11,7 @@ Database: Supabase project **CinemaTheater** (`jjuvwfbzmpkwzjknhdwu`, ap-northea
 | `supabase/migrations/` | Tables from the "DataBase Schema" slide, plus the read/booking functions (RPCs) and cron jobs | applied to Supabase |
 | `supabase/functions/scrape-cinemas/` | **Data-collection API.** Scrapes majorcineplex.com and receives SF data from the collector | deployed, runs every 6 h |
 | `supabase/functions/send-ticket/` | Emails the e-coupon after a booking (needs `RESEND_API_KEY` + `TICKET_FROM` secrets) | deployed |
-| `collector/` | Runs on your computer: the SF Cinema browser collector, and a button to run the Major scrape now | ready; the SF parser still needs the real site's field names (see below) |
+| `collector/` | Runs on your computer: the SF Cinema browser collector (`npm run sf`), and `npm run major` to run the Major scrape now | working |
 | `web/index.html` | **Home page**: all movies, a Major view, an SF view, and search | done |
 | `web/report.html` | **Monitoring report**: opens when you **hold the Home button for 1 minute** | done |
 
@@ -39,15 +39,23 @@ npm run sf                # parse and save SF to Supabase
 npm test                  # parser unit tests
 ```
 
-> **The SF parser is not verified against the real site yet.** sfcinema.com could not be opened while this was built. `sf-parse.mjs` looks for movie, cinema, screen and time fields by name in whatever JSON the site loads, which should cover common layouts. Run `npm run sf:discover` once and share the `collector/out/sf-discovery-*` folder, so the parser can be matched to the exact fields.
+> **How SF is read** (from real captures, Oct 2026): `ticket/data/content` lists the movies, `ticket/data/branch` the 68 branches,
+> and opening `/th/showtime/{movie id}` loads `ticket/data/session?contentId=…` with every showtime of that movie. The collector keeps
+> the next 3 days (`--days=7` for more), pauses between movies and retries the ones SF did not answer. If SF changes its site and the
+> numbers drop to 0, run `npm run sf:discover` and share the `out/sf-discovery-*` folder.
 
 ## Web app
 
 These are static files with no build step. They need to be served over http, because ES modules don't load from `file://`:
 
 ```bash
-cd web && python3 -m http.server 8000     # open http://localhost:8000
+node web/server.mjs        # open http://localhost:5500  (no install needed)
 ```
+(Avoid `npx serve`: its clean URLs drop the `?id=` from links.)
+
+### Deploy on Vercel
+Import the GitHub repo in Vercel, set **Root Directory = `web`**, **Framework Preset = Other**, leave Build Command empty.
+Then add `https://<your-project>.vercel.app/**` to Supabase → Authentication → URL Configuration → Redirect URLs.
 
 - **Home**: the three screens from the mockup. **Home** shows everything, **Major** is red and **SF** is blue. The dots under a poster show which chains have it.
 - **Hidden report**: press and **hold Home for 60 s**. A gold ring fills up after 2 s, and at 60 s the page opens `report.html`. The report refreshes every minute and shows:
@@ -58,17 +66,26 @@ cd web && python3 -m http.server 8000     # open http://localhost:8000
   - The last 20 scrape runs with their errors.
 - The report is only *hidden*, not protected. Anyone who knows `report.html` can open it. It shows counts and scrape logs only, no customer data.
 
-## What is left to build (the other pages)
+## Booking flow (all 6 features from the slide)
 
-The database functions are already in place. Each page only has to call them with `rpc(name, params)` from `web/api.js`.
-
-| # | Feature (from the slide) | Page | Call |
+| # | Feature | Page | Uses |
 |---|---|---|---|
-| 1 | Which cinemas show a movie (Major / SF) | Movie page (choose Major or SF) | `now_showing()` → `has_major` / `has_sf` |
-| 2 | Showtimes per cinema | Date strip + cinema list with times | `movie_dates(p_movie_id, p_brand)`, `movie_showtimes(p_movie_id, p_brand, p_date)` |
-| 3 | Free seats | Seat map (J–I couple 1,000, H–D normal 260, C 280, B–A 290) | `get_seat_map(p_showtime_id)` |
-| 4 | Email for the e-coupon | Email + OTP screen | `supabase.auth.signInWithOtp({ email })` then `verifyOtp(...)` |
-| 5 | Payment method (credit card / QR) | Payment screen | `create_booking(p_showtime_id, p_seat_ids, p_email, p_method)` with `p_method` = `credit_card` or `qr_code`. It needs the OTP login, and payment is simulated |
-| 6 | "Booking complete" + email | Success screen | Edge function `send-ticket` with `{ token }` |
+| 1 | Which chains show a movie | `movie.html?id=` (from a Home card) | `now_showing()` → Major / SF buttons |
+| 2 | Showtimes per cinema | `showtime.html?id=&brand=` date strip, search by branch / region | `movie_dates`, `movie_showtimes` |
+| 3 | Free seats | `seat.html?showtime=` rows J–A, booked seats greyed, up to 10 seats | `get_seat_map` |
+| 4 | Email for the e-coupon | `email.html` email + OTP code (or the link in the email) | Supabase Auth `signInWithOtp` / `verifyOtp` |
+| 5 | Credit card / QR code | `pay.html` (simulated, no card number, no money moves) | `create_booking` (seats + payment in one transaction) |
+| 6 | "จองสำเร็จ" + email | `done.html?token=` ticket code + QR | `booking_details`, edge function `send-ticket` |
 
-The movie cards on Home currently show a "not available yet" toast. Point them at the movie page once it exists (`web/home.js`, the `#grid` click handler).
+In the Major or SF view of Home, a movie card goes straight to that chain's showtimes.
+
+### Supabase settings the booking flow needs (Dashboard → Authentication)
+
+1. **Email OTP code**: *Email Templates* → **Magic Link** and **Confirm signup**: add `{{ .Token }}` to the body,
+   e.g. `<p>รหัส OTP ของคุณ: <b>{{ .Token }}</b></p>`. Without it the email has only a link (the link also works).
+2. **Redirect URLs**: *URL Configuration* → add `http://localhost:5500/**` (and your real site URL when deployed),
+   so the link in the email comes back to `email.html`.
+3. **Who can receive email**: Supabase's built-in email only sends to members of your Supabase team and only a few
+   per hour. For real users set up *SMTP Settings* (for example Resend, Brevo or Gmail SMTP).
+4. **Ticket email** (feature 6): set the edge-function secrets `RESEND_API_KEY` and `TICKET_FROM`
+   (*Edge Functions → Secrets*). Without them the ticket is shown on screen only.

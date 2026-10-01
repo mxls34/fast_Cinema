@@ -1,8 +1,4 @@
 .report .content { padding-bottom: 32px; display: flex; flex-direction: column; gap: 16px; }
-.back {
-  justify-self: start; color: var(--ink); text-decoration: none; font-size: 14px;
-  border: 1px solid var(--accent); border-radius: 10px; padding: 3px 14px; background: rgba(177, 140, 255, 0.15);
-}
 .updated { justify-self: end; font-size: 11px; color: var(--ink-3); text-align: right; }
 
 .health { display: grid; gap: 10px; }
