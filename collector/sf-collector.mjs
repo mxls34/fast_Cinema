@@ -8,6 +8,7 @@
 // Options: --movies=15 (how many movie pages to open), --headless (only after the first run passed the challenge)
 import { chromium } from "playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { callScraper } from "./env.mjs";
 import { parseSf } from "./sf-parse.mjs";
 
@@ -18,7 +19,7 @@ const HOME = "https://www.sfcinema.com/th";
 const OUT = new URL("./out/", import.meta.url);
 
 // a persistent profile keeps the Cloudflare clearance cookie between runs
-const ctx = await chromium.launchPersistentContext(new URL("./.profile", import.meta.url).pathname, {
+const ctx = await chromium.launchPersistentContext(fileURLToPath(new URL("./.profile", import.meta.url)), {
   headless: args.has("headless"),
   locale: "th-TH",
   timezoneId: "Asia/Bangkok",
@@ -75,7 +76,7 @@ if (DISCOVER) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(new URL("responses.json", dir), JSON.stringify(responses, null, 2));
   pages.forEach((p, i) => writeFileSync(new URL(`page-${i}.html`, dir), `<!-- ${p.url} -->\n${p.html}`));
-  console.log("saved to", dir.pathname);
+  console.log("saved to", fileURLToPath(dir));
 }
 
 const { movies, showtimes } = parseSf(responses);
