@@ -7,3 +7,5 @@ collector/package-lock.json
 package-lock.json
 package.json
 .profile-chrome/
+web/serve.json
+web/server.mjs
